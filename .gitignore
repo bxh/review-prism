@@ -6,3 +6,4 @@ build/
 .env
 .venv/
 review-*.md
+.DS_Store
