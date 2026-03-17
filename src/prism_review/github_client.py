@@ -1,6 +1,8 @@
 """GitHub API client for fetching PR context."""
 
 from dataclasses import dataclass, field
+
+import requests
 from github import Github
 
 
@@ -69,3 +71,21 @@ def fetch_pr_context(token: str, owner_repo: str, pr_number: int) -> PRContext:
     )
 
     return ctx
+
+
+def fetch_diff_context(token: str, diff_url: str, owner_repo: str, base: str, head: str) -> PRContext:
+    """Fetch context from a GitHub compare diff URL via the API."""
+    api_url = f"https://api.github.com/repos/{owner_repo}/compare/{base}...{head}"
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3.diff"}
+    resp = requests.get(api_url, headers=headers)
+    resp.raise_for_status()
+
+    return PRContext(
+        title=f"Compare {base}...{head}",
+        body="",
+        author="",
+        base_branch=base,
+        head_branch=head,
+        url=diff_url.removesuffix(".diff"),
+        diff=resp.text,
+    )
