@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .github_client import fetch_pr_context, fetch_diff_context
-from .reviewer import perform_review
+from .github_client import PRContext, fetch_pr_context, fetch_diff_context
+from .reviewer import perform_review, generate_summary
 from .interactive import start_session
 
 
@@ -41,32 +41,8 @@ def parse_input(url: str) -> dict:
     )
 
 
-@click.group()
-def main():
-    """prism-review — AI-powered PR code review."""
-    load_dotenv()
-
-
-@main.command()
-@click.argument("pr_url")
-@click.argument("pr_number", type=int, required=False, default=None)
-@click.option("--model", default="gpt-5.4", help="OpenAI model to use.")
-@click.option("--no-interactive", is_flag=True, help="Skip interactive follow-up session.")
-@click.option("-o", "--save", is_flag=True, default=False, help="Save review report with auto-generated name.")
-@click.option("--output", type=click.Path(), default=None, help="Save review report to a specific file.")
-def review(pr_url: str, pr_number: int | None, model: str, no_interactive: bool, save: bool, output: str | None):
-    """Review a GitHub pull request or compare diff.
-
-    Accepts a PR URL, compare .diff URL, or owner/repo + PR number:
-
-    \b
-      prism review https://github.com/owner/repo/pull/123
-      prism review https://github.com/owner/repo/compare/main...branch.diff
-      prism review owner/repo 123
-    """
-    console = Console()
-
-    # Parse input
+def resolve_context(console: Console, pr_url: str, pr_number: int | None) -> tuple[dict, PRContext]:
+    """Parse input, validate env vars, and fetch PR/diff context."""
     try:
         parsed = parse_input(pr_url)
     except click.BadParameter as e:
@@ -110,6 +86,45 @@ def review(pr_url: str, pr_number: int | None, model: str, no_interactive: bool,
         console.print(f"[red]Error fetching PR: {e}[/red]")
         sys.exit(1)
 
+    return parsed, ctx
+
+
+def auto_output_name(parsed: dict, prefix: str) -> str:
+    """Generate an auto output filename from parsed input."""
+    repo_name = parsed["owner_repo"].replace("/", "-")
+    if parsed["type"] == "pr":
+        return f"{prefix}-{repo_name}-{parsed['pr_number']}.md"
+    else:
+        return f"{prefix}-{repo_name}-{parsed['head'].replace('/', '-')}.md"
+
+
+@click.group()
+def main():
+    """prism-review — AI-powered PR code review."""
+    load_dotenv()
+
+
+@main.command()
+@click.argument("pr_url")
+@click.argument("pr_number", type=int, required=False, default=None)
+@click.option("--model", default="gpt-5.4", help="OpenAI model to use.")
+@click.option("--no-interactive", is_flag=True, help="Skip interactive follow-up session.")
+@click.option("-o", "--save", is_flag=True, default=False, help="Save review report with auto-generated name.")
+@click.option("--output", type=click.Path(), default=None, help="Save review report to a specific file.")
+def review(pr_url: str, pr_number: int | None, model: str, no_interactive: bool, save: bool, output: str | None):
+    """Review a GitHub pull request or compare diff.
+
+    Accepts a PR URL, compare URL, or owner/repo + PR number:
+
+    \b
+      prism review https://github.com/owner/repo/pull/123
+      prism review https://github.com/owner/repo/compare/main...branch
+      prism review owner/repo 123
+    """
+    console = Console()
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    parsed, ctx = resolve_context(console, pr_url, pr_number)
+
     console.print(f"Reviewing: [bold]{ctx.title}[/bold]{' by ' + ctx.author if ctx.author else ''}\n")
 
     # Perform review
@@ -120,17 +135,12 @@ def review(pr_url: str, pr_number: int | None, model: str, no_interactive: bool,
         console.print(f"[red]Error during review: {e}[/red]")
         sys.exit(1)
 
-    # Render review
     console.print(Markdown(review_text))
 
     # Save report
     if save or output:
         if not output:
-            repo_name = owner_repo.replace("/", "-")
-            if parsed["type"] == "pr":
-                output = f"review-{repo_name}-{parsed['pr_number']}.md"
-            else:
-                output = f"review-{repo_name}-{parsed['head'].replace('/', '-')}.md"
+            output = auto_output_name(parsed, "review")
         with open(output, "w") as f:
             f.write(f"# Code Review: {ctx.title}\n\n")
             f.write(f"**PR**: {ctx.url}  \n")
@@ -142,3 +152,47 @@ def review(pr_url: str, pr_number: int | None, model: str, no_interactive: bool,
     # Interactive follow-up
     if not no_interactive:
         start_session(openai_api_key, messages, model)
+
+
+@main.command()
+@click.argument("pr_url")
+@click.argument("pr_number", type=int, required=False, default=None)
+@click.option("--model", default="gpt-5.4", help="OpenAI model to use.")
+@click.option("-o", "--save", is_flag=True, default=False, help="Save summary with auto-generated name.")
+@click.option("--output", type=click.Path(), default=None, help="Save summary to a specific file.")
+def summarize(pr_url: str, pr_number: int | None, model: str, save: bool, output: str | None):
+    """Generate a summary of a GitHub pull request or compare diff.
+
+    Accepts a PR URL, compare URL, or owner/repo + PR number:
+
+    \b
+      prism summarize https://github.com/owner/repo/pull/123
+      prism summarize https://github.com/owner/repo/compare/main...branch
+      prism summarize owner/repo 123
+    """
+    console = Console()
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    parsed, ctx = resolve_context(console, pr_url, pr_number)
+
+    console.print(f"Summarizing: [bold]{ctx.title}[/bold]{' by ' + ctx.author if ctx.author else ''}\n")
+
+    console.print(f"Sending to {model} for summary...\n")
+    try:
+        summary_text, _ = generate_summary(openai_api_key, ctx, model)
+    except Exception as e:
+        console.print(f"[red]Error during summary: {e}[/red]")
+        sys.exit(1)
+
+    console.print(Markdown(summary_text))
+
+    # Save summary
+    if save or output:
+        if not output:
+            output = auto_output_name(parsed, "summary")
+        with open(output, "w") as f:
+            f.write(f"# Summary: {ctx.title}\n\n")
+            f.write(f"**PR**: {ctx.url}  \n")
+            f.write(f"**Author**: {ctx.author}  \n")
+            f.write(f"**Model**: {model}\n\n---\n\n")
+            f.write(summary_text)
+        console.print(f"\nSummary saved to [bold]{output}[/bold]")

@@ -53,15 +53,26 @@ def _build_user_message(ctx: PRContext) -> str:
     return "\n".join(sections)
 
 
-def perform_review(
-    api_key: str, ctx: PRContext, model: str = "gpt-5.4"
+SUMMARY_PROMPT = """\
+You are a senior software engineer writing a concise summary of a GitHub pull request.
+
+Your summary should include:
+- **Purpose**: What this PR does and why (1-2 sentences)
+- **Key Changes**: Bulleted list of the most important changes
+- **Impact**: What parts of the system are affected
+
+Keep it concise and suitable for use as a PR description. Format in Markdown."""
+
+
+def _call_openai(
+    api_key: str, system_prompt: str, user_message: str, model: str
 ) -> tuple[str, list[dict]]:
-    """Send PR context to OpenAI and return (review_text, messages)."""
+    """Make an OpenAI chat completion and return (response_text, messages)."""
     client = OpenAI(api_key=api_key)
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": _build_user_message(ctx)},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
     ]
 
     response = client.chat.completions.create(
@@ -70,7 +81,21 @@ def perform_review(
         temperature=0.3,
     )
 
-    review_text = response.choices[0].message.content
-    messages.append({"role": "assistant", "content": review_text})
+    text = response.choices[0].message.content
+    messages.append({"role": "assistant", "content": text})
 
-    return review_text, messages
+    return text, messages
+
+
+def perform_review(
+    api_key: str, ctx: PRContext, model: str = "gpt-5.4"
+) -> tuple[str, list[dict]]:
+    """Send PR context to OpenAI for code review."""
+    return _call_openai(api_key, SYSTEM_PROMPT, _build_user_message(ctx), model)
+
+
+def generate_summary(
+    api_key: str, ctx: PRContext, model: str = "gpt-5.4"
+) -> tuple[str, list[dict]]:
+    """Send PR context to OpenAI for summary generation."""
+    return _call_openai(api_key, SUMMARY_PROMPT, _build_user_message(ctx), model)
