@@ -151,7 +151,15 @@ def review(pr_url: str, pr_number: int | None, model: str, no_interactive: bool,
 
     # Interactive follow-up
     if not no_interactive:
-        start_session(openai_api_key, messages, model)
+        github_token = os.environ.get("GITHUB_TOKEN")
+
+        def reload_fn():
+            if parsed["type"] == "pr":
+                return fetch_pr_context(github_token, parsed["owner_repo"], parsed["pr_number"])
+            else:
+                return fetch_diff_context(github_token, parsed["url"], parsed["owner_repo"], parsed["base"], parsed["head"])
+
+        start_session(openai_api_key, messages, model, reload_fn=reload_fn)
 
 
 @main.command()
